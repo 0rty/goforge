@@ -120,7 +120,6 @@ func main() {
 		fmt.Println(tok.Parts[2])
 		os.Exit(0)
 	}
-	fmt.Println("[+] Algorithm detected:", alg)
 
 	if err := replaceValue(sets, tok.Payload); err != nil {
 		fmt.Println("[!]", err)

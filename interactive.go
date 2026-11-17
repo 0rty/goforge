@@ -50,23 +50,30 @@ func ask(p survey.Prompt, response any) error {
 	}))
 }
 
+// readToken asks for a JWT (string or @file) and returns the cleaned token.
+func readToken() (string, error) {
+	var raw string
+	if err := ask(&survey.Input{Message: "Paste JWT (or @file):"}, &raw); err != nil {
+		return "", err
+	}
+	raw, err := resolveValue(raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(raw), nil
+}
+
 // runInteractive runs the guided interactive mode.
 func runInteractive() {
 	boxLines([]string{"⚒ GoForge", "JWT forging toolkit"})
 	fmt.Println()
 
 	// 1. Read the token (also accepts @file)
-	var raw string
-	if err := ask(&survey.Input{Message: "Paste JWT (or @file):"}, &raw); err != nil {
-		fmt.Println("[!]", err)
-		return
-	}
-	raw, err := resolveValue(raw)
+	raw, err := readToken()
 	if err != nil {
 		fmt.Println("[!]", err)
 		return
 	}
-	raw = strings.TrimSpace(raw)
 
 	// 2. Loop: run attacks and keep returning to the menu until "quit".
 	for {
@@ -77,7 +84,6 @@ func runInteractive() {
 			return
 		}
 		alg, _ := tok.Header["alg"].(string)
-		fmt.Printf("\n[+] Algorithm detected: %s\n", alg)
 
 		// Attack menu (arrow keys)
 		var choice string
@@ -92,6 +98,7 @@ func runInteractive() {
 				"jku hosted",
 				"HMAC (known key)",
 				"bruteforce (wordlist)",
+				"change JWT",
 				"quit",
 			},
 		}, &choice); err != nil {
@@ -100,6 +107,15 @@ func runInteractive() {
 		}
 		if choice == "quit" {
 			return
+		}
+		if choice == "change JWT" {
+			newRaw, e := readToken()
+			if e != nil {
+				fmt.Println("[!]", e)
+			} else {
+				raw = newRaw
+			}
+			continue
 		}
 
 		// analyse = read-only, no forging -> back to the menu
