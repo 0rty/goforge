@@ -1,0 +1,11 @@
+# Compiled binary (built with `go build -o goforge .`)
+/goforge
+
+# Go build / test artifacts
+*.exe
+*.test
+*.out
+
+# Editor / OS
+.DS_Store
+*.swp
