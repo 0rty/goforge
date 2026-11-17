@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"unicode/utf8"
@@ -48,6 +49,12 @@ func ask(p survey.Prompt, response any) error {
 	return survey.AskOne(p, response, survey.WithIcons(func(icons *survey.IconSet) {
 		icons.Question.Text = "[GoForge]>>"
 	}))
+}
+
+// completeFiles returns path suggestions for survey's tab-completion (Suggest).
+func completeFiles(toComplete string) []string {
+	matches, _ := filepath.Glob(toComplete + "*")
+	return matches
 }
 
 // readToken asks for a JWT (string or @file) and returns the cleaned token.
@@ -163,7 +170,7 @@ func runInteractive() {
 
 		case "confusion RS->HS":
 			var pub string
-			ask(&survey.Input{Message: "public key file (PEM):"}, &pub)
+			ask(&survey.Input{Message: "public key file (PEM):", Suggest: completeFiles}, &pub)
 			data, e := os.ReadFile(pub)
 			if e != nil {
 				fmt.Println("[!]", e)
@@ -194,7 +201,7 @@ func runInteractive() {
 
 		case "bruteforce (wordlist)":
 			var wl string
-			ask(&survey.Input{Message: "wordlist file:"}, &wl)
+			ask(&survey.Input{Message: "wordlist file:", Suggest: completeFiles}, &wl)
 			found, e := attack.BruteforceKey(tok.Parts, wl, runtime.NumCPU(), alg)
 			if e != nil {
 				fmt.Println("[!]", e)
